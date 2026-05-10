@@ -18,6 +18,50 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const FALLBACK_API_KEYS = [
+  'AIzaSyBzQ8sc_iioTDhvNte32G5UYyYmqC299bQ',
+  'AIzaSyAO7s8ZHlbxtyFybDBCTz1b7pcsk5l99kQ',
+  'AIzaSyB78Wa8No-9SNHzzkSb3wCG3ratdCLB0no',
+];
+
+/**
+ * Идет по массиву ключей. Если один не срабатывает (например, исчерпан лимит 
+ * или ключ заблокирован), автоматически пробует следующий.
+ */
+async function generateWithFallback(model: string, contents: string) {
+  const keysToTry = [...FALLBACK_API_KEYS];
+  // Добавляем ключ из окружения самым первым, если он есть
+  try {
+    // @ts-ignore
+    const envKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY);
+    if (envKey && !keysToTry.includes(envKey)) {
+      keysToTry.unshift(envKey);
+    }
+  } catch (err) {
+    // Игнорируем ошибки при доступе к окружению в браузере (например на Netlify)
+  }
+  
+  let lastError;
+  for (const apiKey of keysToTry) {
+    try {
+      const ai = new GoogleGenAI({ 
+        apiKey,
+        // Явное указание baseURL, хотя SDK @google/genai сам использует этот адрес по умолчанию
+        baseUrl: 'https://generativelanguage.googleapis.com' 
+      });
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+      });
+      return response;
+    } catch (error: any) {
+      console.warn(`Ключ не сработал, пробуем следующий... Ошибка:`, error?.message || error);
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Все API ключи исчерпаны или нерабочие.");
+}
+
 // --- Types & Constants ---
 const THEMES = [
   { id: 'dark', name: 'Тёмная', desc: 'Стильная и современная' },
@@ -546,7 +590,6 @@ function CreatePage({ generationsLeft, useGeneration, saveStory, textSize, user 
     setStory('');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const prompt = `
         Ты — гениальный писатель-романист. Напиши ОЧЕНЬ длинный, невероятно детализированный фанфик.
         Не торопи события. Описывай окружение, мысли героев, эмоции.
@@ -562,10 +605,7 @@ function CreatePage({ generationsLeft, useGeneration, saveStory, textSize, user 
         Пиши на русском языке. Литературный слог.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
+      const response = await generateWithFallback('gemini-2.5-flash', prompt);
 
       const text = response.text || 'Ошибка генерации.';
       setStory(text);
@@ -904,7 +944,6 @@ function SearchPage() {
     setSearchError('');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const prompt = `
         Пользователь ищет фанфики по описанию: "${query}".
         
@@ -918,10 +957,7 @@ function SearchPage() {
         - url: строка (ссылка на поиск или чтение, можно заглушку https://ficbook.net/find?...)
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
+      const response = await generateWithFallback('gemini-2.5-flash', prompt);
 
       let text = response.text || '[]';
       text = text.replace(/```json/g, '').replace(/```/g, '').trim();
