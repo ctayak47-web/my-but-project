@@ -1,0 +1,156 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=Merriweather:wght@400;700&family=Lora:ital,wght@0,400;0,500;1,400&family=Nunito:wght@400;600;700&family=Fira+Code:wght@400;500&family=Caveat:wght@500;600&family=Oswald:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-book: "Merriweather", serif;
+  --font-lora: "Lora", serif;
+  --font-nunito: "Nunito", sans-serif;
+  --font-fira: "Fira Code", monospace;
+  --font-handwriting: "Caveat", cursive;
+  --font-oswald: "Oswald", sans-serif;
+
+  --color-bg-main: var(--bg-color);
+  --color-text-main: var(--text-color);
+  --color-text-muted: var(--text-muted);
+  --color-primary-main: var(--primary-color);
+  --color-primary-hover: var(--primary-hover);
+  --color-border-main: var(--border-color);
+  --color-panel-main: var(--panel-bg);
+  --color-panel-hover: var(--panel-hover);
+}
+
+:root {
+  /* Default Dark Theme - Sleek & Modern */
+  --bg-color: #09090b;
+  --text-color: #fafafa;
+  --text-muted: #a1a1aa;
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --border-color: #27272a;
+  --panel-bg: #18181b;
+  --panel-hover: #27272a;
+}
+
+[data-theme="light"] {
+  /* Clean Light Theme */
+  --bg-color: #fcfcfc;
+  --text-color: #09090b;
+  --text-muted: #71717a;
+  --primary-color: #2563eb;
+  --primary-hover: #1d4ed8;
+  --border-color: #e4e4e7;
+  --panel-bg: #ffffff;
+  --panel-hover: #f4f4f5;
+}
+
+[data-theme="book"] {
+  /* Elegant Book Theme */
+  --bg-color: #f5f0e6;
+  --text-color: #2c241b;
+  --text-muted: #736354;
+  --primary-color: #9c6644;
+  --primary-hover: #7f5539;
+  --border-color: #e6dcc8;
+  --panel-bg: #fdfbf7;
+  --panel-hover: #f5f0e6;
+}
+
+[data-theme="midnight"] {
+  /* Deep Blue/Purple Dark Theme */
+  --bg-color: #0B0F19;
+  --text-color: #E2E8F0;
+  --text-muted: #94A3B8;
+  --primary-color: #818CF8;
+  --primary-hover: #6366F1;
+  --border-color: #1E293B;
+  --panel-bg: #111827;
+  --panel-hover: #1F2937;
+}
+
+[data-theme="forest"] {
+  /* Earthy Greens and Browns */
+  --bg-color: #1C2321;
+  --text-color: #E6E8E6;
+  --text-muted: #A3B19B;
+  --primary-color: #7D9C76;
+  --primary-hover: #5C7A56;
+  --border-color: #2D3A34;
+  --panel-bg: #222B28;
+  --panel-hover: #2D3A34;
+}
+
+[data-theme="mocha"] {
+  /* Warm Dark Browns */
+  --bg-color: #2A2421;
+  --text-color: #E8E3DF;
+  --text-muted: #A89F98;
+  --primary-color: #D4A373;
+  --primary-hover: #B5835A;
+  --border-color: #3E3631;
+  --panel-bg: #322A27;
+  --panel-hover: #3E3631;
+}
+
+[data-theme="rose"] {
+  /* Soft Pink/Warm Light Theme */
+  --bg-color: #FFF5F5;
+  --text-color: #2D3748;
+  --text-muted: #718096;
+  --primary-color: #F687B3;
+  --primary-hover: #ED64A6;
+  --border-color: #FED7E2;
+  --panel-bg: #FFFFFF;
+  --panel-hover: #FFF5F5;
+}
+
+[data-theme="nord"] {
+  /* Arctic Blue-Gray */
+  --bg-color: #2E3440;
+  --text-color: #ECEFF4;
+  --text-muted: #D8DEE9;
+  --primary-color: #88C0D0;
+  --primary-hover: #81A1C1;
+  --border-color: #434C5E;
+  --panel-bg: #3B4252;
+  --panel-hover: #4C566A;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  transition: background-color 0.4s ease, color 0.4s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar for better aesthetics */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Markdown Styles */
+.markdown-body p {
+  margin-bottom: 1.5em;
+  line-height: 1.8;
+}
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  margin-top: 2em;
+  margin-bottom: 1em;
+  font-weight: 600;
+}
+.markdown-body em {
+  opacity: 0.9;
+}

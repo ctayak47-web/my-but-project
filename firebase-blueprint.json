@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and usage limits",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "User profile photo URL" },
+        "generationsUsed": { "type": "number", "description": "Number of generations used today" },
+        "lastGenerationDate": { "type": "string", "description": "Date string of last generation to reset limits" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Story": {
+      "title": "Story",
+      "description": "A generated fanfiction story",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID of the user who created the story" },
+        "title": { "type": "string", "description": "Title of the story" },
+        "fandom": { "type": "string", "description": "Fandom of the story" },
+        "content": { "type": "string", "description": "The generated story content" },
+        "date": { "type": "string", "description": "Formatted date string" },
+        "createdAt": { "type": "timestamp", "description": "Firestore timestamp of creation" }
+      },
+      "required": ["userId", "title", "fandom", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profiles and generation limits"
+    },
+    "/stories/{storyId}": {
+      "schema": { "$ref": "#/entities/Story" },
+      "description": "Stores generated stories"
+    }
+  }
+}
