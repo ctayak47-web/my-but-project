@@ -18,11 +18,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const FALLBACK_API_KEYS = [
-  'AIzaSyBzQ8sc_iioTDhvNte32G5UYyYmqC299bQ',
-  'AIzaSyAO7s8ZHlbxtyFybDBCTz1b7pcsk5l99kQ',
-  'AIzaSyB78Wa8No-9SNHzzkSb3wCG3ratdCLB0no',
-];
+const FALLBACK_API_KEYS: string[] = []; // Оставьте пустым, ключи будут браться из .env
 
 /**
  * Идет по массиву ключей. Если один не срабатывает (например, исчерпан лимит 
