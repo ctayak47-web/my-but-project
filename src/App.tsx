@@ -86,7 +86,7 @@ const FONTS = [
   { id: 'font-handwriting', name: 'Caveat', desc: 'Рукописный стиль' },
 ];
 
-const MAX_AUTH_GENERATIONS = 2;
+const MAX_AUTH_GENERATIONS = 5;
 
 interface Story {
   id: string;
@@ -624,9 +624,9 @@ function CreatePage({ generationsLeft, useGeneration, saveStory, textSize, user 
         storyRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setStory('Произошла ошибка при обращении к нейросети.');
+      setStory('Произошла ошибка при обращении к нейросети: ' + (error?.message || String(error)));
     } finally {
       setIsGenerating(false);
     }
