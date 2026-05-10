@@ -46,8 +46,15 @@ async function generateWithFallback(model: string, contents: string) {
     }
   } catch (err) {}
 
-  if (envKey && !keysToTry.includes(envKey)) {
-    keysToTry.unshift(envKey);
+  if (envKey) {
+    // Разделяем ключи по запятой, убираем пробелы и пустые строки
+    const parsedKeys = envKey.split(',').map(k => k.trim()).filter(Boolean);
+    // Добавляем ключи в начало массива (поэтому делаем reverse, чтобы порядок сохранился)
+    parsedKeys.reverse().forEach(k => {
+      if (!keysToTry.includes(k)) {
+        keysToTry.unshift(k);
+      }
+    });
   }
   
   let lastError;
