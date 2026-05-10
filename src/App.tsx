@@ -31,14 +31,23 @@ const FALLBACK_API_KEYS = [
 async function generateWithFallback(model: string, contents: string) {
   const keysToTry = [...FALLBACK_API_KEYS];
   // Добавляем ключ из окружения самым первым, если он есть
+  let envKey = '';
   try {
-    // @ts-ignore
-    const envKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY);
-    if (envKey && !keysToTry.includes(envKey)) {
-      keysToTry.unshift(envKey);
+    // В AI Studio ключ лежит в process.env.GEMINI_API_KEY
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      envKey = process.env.GEMINI_API_KEY;
     }
-  } catch (err) {
-    // Игнорируем ошибки при доступе к окружению в браузере (например на Netlify)
+  } catch (err) {}
+  
+  try {
+    // При деплое на Netlify/Render он должен быть в VITE_GEMINI_API_KEY
+    if (!envKey && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+      envKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+  } catch (err) {}
+
+  if (envKey && !keysToTry.includes(envKey)) {
+    keysToTry.unshift(envKey);
   }
   
   let lastError;
