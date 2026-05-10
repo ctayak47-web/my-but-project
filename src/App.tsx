@@ -11,9 +11,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { auth, db, loginWithGoogle, logout } from './firebase';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { collection, doc, setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp, addDoc, where } from 'firebase/firestore';
+import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 // --- Utils ---
 function cn(...inputs: ClassValue[]) {
@@ -54,6 +52,11 @@ interface Story {
   fandom: string;
 }
 
+interface LocalUser {
+  username: string;
+  isAdmin?: boolean;
+}
+
 // --- Global State Management (Context) ---
 interface AppContextType {
   theme: string;
@@ -62,7 +65,7 @@ interface AppContextType {
   textSize: number;
   generationsLeft: number;
   stories: Story[];
-  user: FirebaseUser | null;
+  user: LocalUser | null;
   isAuthReady: boolean;
   updateTheme: (t: string) => void;
   updateFont: (f: string) => void;
@@ -70,6 +73,8 @@ interface AppContextType {
   updateTextSize: (s: number) => void;
   useGeneration: () => Promise<void>;
   saveStory: (story: Omit<Story, 'id' | 'date'>) => Promise<void>;
+  login: (username: string, password?: string, isRegister?: boolean) => { success: boolean; error?: string };
+  logout: () => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -87,7 +92,7 @@ function AppProvider({ children }: { children: React.ReactNode }) {
   const [textSize, setTextSize] = useState<number>(18);
   const [generationsLeft, setGenerationsLeft] = useState(0);
   const [stories, setStories] = useState<Story[]>([]);
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<LocalUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   // Local storage for UI settings
@@ -105,78 +110,90 @@ function AppProvider({ children }: { children: React.ReactNode }) {
     document.documentElement.setAttribute('data-theme', savedTheme);
   }, []);
 
-  // Auth & Firestore sync
+  // Auth & Storage sync
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      setIsAuthReady(true);
+    // Admin setup
+    const allUsers = JSON.parse(localStorage.getItem('crolff-all-users') || '[]');
+    if (!allUsers.includes('crollow')) {
+      allUsers.push('crollow');
+      localStorage.setItem('crolff-all-users', JSON.stringify(allUsers));
+      localStorage.setItem('crolff-user-crollow', JSON.stringify({
+        username: 'crollow',
+        password: '1234',
+        isAdmin: true,
+        extraGenerations: 0
+      }));
+    }
 
-      if (currentUser) {
-        // Sync user profile
-        const userRef = doc(db, 'users', currentUser.uid);
-        try {
-          const userSnap = await getDoc(userRef);
-          const today = new Date().toDateString();
-
-          if (!userSnap.exists()) {
-            await setDoc(userRef, {
-              uid: currentUser.uid,
-              email: currentUser.email,
-              displayName: currentUser.displayName,
-              photoURL: currentUser.photoURL,
-              generationsUsed: 0,
-              lastGenerationDate: today
-            });
-            setGenerationsLeft(MAX_AUTH_GENERATIONS);
-          } else {
-            const data = userSnap.data();
-            if (data.lastGenerationDate !== today) {
-              await setDoc(userRef, { generationsUsed: 0, lastGenerationDate: today }, { merge: true });
-              setGenerationsLeft(MAX_AUTH_GENERATIONS);
-            } else {
-              setGenerationsLeft(Math.max(0, MAX_AUTH_GENERATIONS - (data.generationsUsed || 0)));
-            }
-          }
-        } catch (error) {
-          console.error("Firestore user sync error:", error);
-        }
+    const savedUser = localStorage.getItem('crolff-local-user');
+    if (savedUser) {
+      const u = JSON.parse(savedUser);
+      setUser(u);
+      
+      const uData = JSON.parse(localStorage.getItem(`crolff-user-${u.username}`) || '{}');
+      const extra = uData.extraGenerations || 0;
+      
+      const today = new Date().toDateString();
+      const usageData = JSON.parse(localStorage.getItem(`crolff-usage-${u.username}`) || '{}');
+      if (usageData.date !== today) {
+        setGenerationsLeft(u.isAdmin ? 9999 : MAX_AUTH_GENERATIONS + extra);
+        localStorage.setItem(`crolff-usage-${u.username}`, JSON.stringify({ date: today, count: 0 }));
       } else {
-        setGenerationsLeft(0);
-        const savedStories = JSON.parse(localStorage.getItem('crolff-stories') || '[]');
-        setStories(savedStories);
+        setGenerationsLeft(u.isAdmin ? 9999 : Math.max(0, MAX_AUTH_GENERATIONS + extra - (usageData.count || 0)));
       }
-    });
-
-    return () => unsubscribeAuth();
+      
+      const savedStories = JSON.parse(localStorage.getItem(`crolff-stories-${u.username}`) || '[]');
+      setStories(savedStories);
+    } else {
+      setGenerationsLeft(0);
+      setStories([]);
+    }
+    setIsAuthReady(true);
   }, []);
 
-  // Stories sync
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'stories'), where('userId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedStories: Story[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        fetchedStories.push({
-          id: doc.id,
-          title: data.title,
-          fandom: data.fandom,
-          content: data.content,
-          date: data.date || new Date().toLocaleDateString(),
-          createdAt: data.createdAt?.toMillis() || Date.now()
-        } as any);
-      });
+  const login = (username: string, password?: string, isRegister?: boolean) => {
+    const allUsers = JSON.parse(localStorage.getItem('crolff-all-users') || '[]');
+    let uData = JSON.parse(localStorage.getItem(`crolff-user-${username}`) || 'null');
+    
+    if (isRegister) {
+      if (uData) return { success: false, error: 'Пользователь уже существует' };
+      if (!password) return { success: false, error: 'Пароль обязателен' };
       
-      // Sort client-side to avoid requiring a composite index in Firestore
-      fetchedStories.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      
-      setStories(fetchedStories);
-    }, (error) => {
-      console.error("Firestore onSnapshot error:", error);
-    });
-    return () => unsubscribe();
-  }, [user]);
+      uData = { username, password, isAdmin: false, extraGenerations: 0 };
+      allUsers.push(username);
+      localStorage.setItem('crolff-all-users', JSON.stringify(allUsers));
+      localStorage.setItem(`crolff-user-${username}`, JSON.stringify(uData));
+    } else {
+      if (!uData) return { success: false, error: 'Пользователь не найден' };
+      if (password && uData.password !== password) return { success: false, error: 'Неверный пароль' };
+    }
+
+    const u = { username: uData.username, isAdmin: uData.isAdmin };
+    setUser(u);
+    localStorage.setItem('crolff-local-user', JSON.stringify(u));
+    
+    const today = new Date().toDateString();
+    const usageData = JSON.parse(localStorage.getItem(`crolff-usage-${u.username}`) || '{}');
+    const extra = uData.extraGenerations || 0;
+    
+    if (usageData.date !== today) {
+      setGenerationsLeft(u.isAdmin ? 9999 : MAX_AUTH_GENERATIONS + extra);
+      localStorage.setItem(`crolff-usage-${u.username}`, JSON.stringify({ date: today, count: 0 }));
+    } else {
+      setGenerationsLeft(u.isAdmin ? 9999 : Math.max(0, MAX_AUTH_GENERATIONS + extra - (usageData.count || 0)));
+    }
+    
+    const savedStories = JSON.parse(localStorage.getItem(`crolff-stories-${u.username}`) || '[]');
+    setStories(savedStories);
+    return { success: true };
+  };
+  
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem('crolff-local-user');
+    setGenerationsLeft(0);
+    setStories([]);
+  };
 
   const updateTheme = (newTheme: string) => {
     setTheme(newTheme);
@@ -202,46 +219,31 @@ function AppProvider({ children }: { children: React.ReactNode }) {
 
   const useGeneration = async () => {
     if (user) {
-      try {
-        const userRef = doc(db, 'users', user.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const data = userSnap.data();
-          const newUsed = (data.generationsUsed || 0) + 1;
-          await setDoc(userRef, { generationsUsed: newUsed }, { merge: true });
-          setGenerationsLeft(Math.max(0, MAX_AUTH_GENERATIONS - newUsed));
-        }
-      } catch (error) {
-        console.error("Error updating generations:", error);
-      }
+      const uData = JSON.parse(localStorage.getItem(`crolff-user-${user.username}`) || '{}');
+      const extra = uData.extraGenerations || 0;
+
+      const today = new Date().toDateString();
+      const usageData = JSON.parse(localStorage.getItem(`crolff-usage-${user.username}`) || '{}');
+      const newCount = (usageData.date === today ? (usageData.count || 0) : 0) + 1;
+      localStorage.setItem(`crolff-usage-${user.username}`, JSON.stringify({ date: today, count: newCount }));
+      setGenerationsLeft(user.isAdmin ? 9999 : Math.max(0, MAX_AUTH_GENERATIONS + extra - newCount));
     }
   };
 
   const saveStory = async (storyData: Omit<Story, 'id' | 'date'>) => {
+    if (!user) return;
     const dateStr = new Date().toLocaleDateString();
-    if (user) {
-      try {
-        await addDoc(collection(db, 'stories'), {
-          ...storyData,
-          userId: user.uid,
-          date: dateStr,
-          createdAt: serverTimestamp()
-        });
-      } catch (error) {
-        console.error("Error saving story:", error);
-      }
-    } else {
-      const newStory: Story = { ...storyData, id: Date.now().toString(), date: dateStr };
-      const newStories = [newStory, ...stories];
-      setStories(newStories);
-      localStorage.setItem('crolff-stories', JSON.stringify(newStories));
-    }
+    const newStory: Story = { ...storyData, id: Date.now().toString(), date: dateStr };
+    const newStories = [newStory, ...stories];
+    setStories(newStories);
+    localStorage.setItem(`crolff-stories-${user.username}`, JSON.stringify(newStories));
   };
 
   return (
     <AppContext.Provider value={{
       theme, font, accentColor, textSize, generationsLeft, stories, user, isAuthReady,
-      updateTheme, updateFont, updateAccentColor, updateTextSize, useGeneration, saveStory
+      updateTheme, updateFont, updateAccentColor, updateTextSize, useGeneration, saveStory,
+      login, logout
     }}>
       {children}
     </AppContext.Provider>
@@ -252,27 +254,110 @@ function AppProvider({ children }: { children: React.ReactNode }) {
 
 function Navbar({ generationsLeft }: { generationsLeft: number }) {
   const location = useLocation();
-  const { user } = useAppStore();
+  const { user, login, logout } = useAppStore();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [loginError, setLoginError] = useState('');
   
   const navItems = [
     { path: '/', icon: HomeIcon, label: 'Главная' },
     { path: '/create', icon: Sparkles, label: 'Создать' },
     { path: '/search', icon: Search, label: 'Поиск' },
     { path: '/library', icon: Library, label: 'Библиотека' },
+    ...(user?.isAdmin ? [{ path: '/admin', icon: Settings, label: 'Админка' }] : []),
     { path: '/settings', icon: Settings, label: 'Настройки' },
   ];
 
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    if (usernameInput.trim() && passwordInput.trim()) {
+      const res = login(usernameInput.trim(), passwordInput.trim(), isRegisterMode);
+      if (res.success) {
+        setShowLoginModal(false);
+        setUsernameInput('');
+        setPasswordInput('');
+      } else {
+        setLoginError(res.error || 'Ошибка');
+      }
+    }
+  };
+
   return (
-    <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-bg-main/80 border-b border-border-main">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2 group">
-          <div className="bg-primary-main/10 p-2 rounded-xl group-hover:bg-primary-main/20 transition-colors">
-            <BookOpen className="w-5 h-5 text-primary-main" />
+    <>
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-bg-main/80 border-b border-border-main">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 group">
+            <div className="bg-primary-main/10 p-2 rounded-xl group-hover:bg-primary-main/20 transition-colors">
+              <BookOpen className="w-5 h-5 text-primary-main" />
+            </div>
+            <span className="text-xl font-bold tracking-tight">CrolFF</span>
+          </Link>
+          
+          <nav className="hidden md:flex items-center gap-1">
+            {navItems.map((item) => {
+              const isActive = location.pathname === item.path;
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all",
+                    isActive 
+                      ? "bg-panel-hover text-text-main" 
+                      : "text-text-muted hover:text-text-main hover:bg-panel-main"
+                  )}
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="flex items-center gap-3">
+            {user && (
+              <div className="hidden sm:flex items-center gap-2 text-sm">
+                <span className={cn(
+                  "font-semibold px-3 py-1.5 rounded-lg border",
+                  generationsLeft > 0 || user.isAdmin
+                    ? "bg-primary-main/10 text-primary-main border-primary-main/20" 
+                    : "bg-red-500/10 text-red-500 border-red-500/20"
+                )}>
+                  {user.isAdmin ? "∞" : generationsLeft} <span className="hidden lg:inline font-normal opacity-80">генераций</span>
+                </span>
+              </div>
+            )}
+            
+            {user ? (
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full border border-border-main flex items-center justify-center bg-panel-main text-primary-main font-bold capitalize">
+                  {user.username.charAt(0)}
+                </div>
+                <button 
+                  onClick={logout}
+                  className="p-2 text-text-muted hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                  title="Выйти"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={() => setShowLoginModal(true)}
+                className="flex items-center gap-2 bg-panel-main border border-border-main text-text-main px-3 py-2 rounded-lg font-medium hover:bg-panel-hover transition-colors text-sm"
+              >
+                <LogIn className="w-4 h-4" />
+                <span className="hidden sm:inline">Войти</span>
+              </button>
+            )}
           </div>
-          <span className="text-xl font-bold tracking-tight">CrolFF</span>
-        </Link>
+        </div>
         
-        <nav className="hidden md:flex items-center gap-1">
+        {/* Mobile Nav */}
+        <div className="md:hidden border-t border-border-main bg-bg-main flex justify-around p-2 overflow-x-auto">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             return (
@@ -280,85 +365,101 @@ function Navbar({ generationsLeft }: { generationsLeft: number }) {
                 key={item.path}
                 to={item.path}
                 className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all",
-                  isActive 
-                    ? "bg-panel-hover text-text-main" 
-                    : "text-text-muted hover:text-text-main hover:bg-panel-main"
+                  "flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all min-w-[64px]",
+                  isActive ? "text-primary-main" : "text-text-muted"
                 )}
               >
-                <item.icon className="w-4 h-4" />
+                <item.icon className="w-5 h-5" />
                 {item.label}
               </Link>
             );
           })}
-        </nav>
-
-        <div className="flex items-center gap-3">
-          {user && (
-            <div className="hidden sm:flex items-center gap-2 text-sm">
-              <span className={cn(
-                "font-semibold px-3 py-1.5 rounded-lg border",
-                generationsLeft > 0 
-                  ? "bg-primary-main/10 text-primary-main border-primary-main/20" 
-                  : "bg-red-500/10 text-red-500 border-red-500/20"
-              )}>
-                {generationsLeft} / {MAX_AUTH_GENERATIONS} <span className="hidden lg:inline font-normal opacity-80">генераций</span>
-              </span>
-            </div>
-          )}
-          
-          {user ? (
-            <div className="flex items-center gap-2">
-              <img src={user.photoURL || ''} alt="Profile" className="w-8 h-8 rounded-full border border-border-main" />
-              <button 
-                onClick={logout}
-                className="p-2 text-text-muted hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-                title="Выйти"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            <button 
-              onClick={async () => {
-                try {
-                  await loginWithGoogle();
-                } catch (error: any) {
-                  if (error.code !== 'auth/popup-closed-by-user' && error.code !== 'auth/cancelled-popup-request') {
-                    console.error('Login error:', error);
-                    alert('Ошибка при входе. Попробуйте еще раз.');
-                  }
-                }
-              }}
-              className="flex items-center gap-2 bg-panel-main border border-border-main text-text-main px-3 py-2 rounded-lg font-medium hover:bg-panel-hover transition-colors text-sm"
-            >
-              <LogIn className="w-4 h-4" />
-              <span className="hidden sm:inline">Войти</span>
-            </button>
-          )}
         </div>
-      </div>
-      
-      {/* Mobile Nav */}
-      <div className="md:hidden border-t border-border-main bg-bg-main flex justify-around p-2 overflow-x-auto">
-        {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={cn(
-                "flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all min-w-[64px]",
-                isActive ? "text-primary-main" : "text-text-muted"
-              )}
+      </header>
+
+      {/* Login Modal */}
+      <AnimatePresence>
+        {showLoginModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-bg-main border border-border-main rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl"
             >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-            </Link>
-          );
-        })}
-      </div>
-    </header>
+              <div className="p-6">
+                <h3 className="text-xl font-bold mb-2">{isRegisterMode ? 'Регистрация' : 'Авторизация'}</h3>
+                <p className="text-text-muted text-sm mb-4">
+                  {isRegisterMode ? 'Придумайте логин и пароль.' : 'Войдите, используя свой логин и пароль.'}
+                </p>
+                
+                {loginError && (
+                  <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-sm">
+                    {loginError}
+                  </div>
+                )}
+                
+                <form onSubmit={handleLoginSubmit} className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Имя пользователя</label>
+                    <input 
+                      type="text" 
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      placeholder="Например, crollow"
+                      className="w-full bg-panel-main border border-border-main rounded-xl px-4 py-3 outline-none focus:border-primary-main focus:ring-1 focus:ring-primary-main transition-all"
+                      autoFocus
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Пароль</label>
+                    <input 
+                      type="password" 
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-panel-main border border-border-main rounded-xl px-4 py-3 outline-none focus:border-primary-main focus:ring-1 focus:ring-primary-main transition-all"
+                      required
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-2">
+                    <button 
+                      type="button"
+                      onClick={() => { setIsRegisterMode(!isRegisterMode); setLoginError(''); }}
+                      className="text-sm text-primary-main hover:underline"
+                    >
+                      {isRegisterMode ? 'Уже есть аккаунт?' : 'Создать аккаунт'}
+                    </button>
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button 
+                      type="button"
+                      onClick={() => setShowLoginModal(false)}
+                      className="flex-1 px-4 py-3 rounded-xl border border-border-main bg-panel-main hover:bg-panel-hover font-medium transition-colors"
+                    >
+                      Отмена
+                    </button>
+                    <button 
+                      type="submit"
+                      disabled={!usernameInput.trim() || !passwordInput.trim()}
+                      className="flex-1 px-4 py-3 rounded-xl bg-primary-main hover:bg-primary-hover text-white font-medium transition-colors disabled:opacity-50"
+                    >
+                      {isRegisterMode ? 'Регистрация' : 'Войти'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
@@ -431,7 +532,7 @@ function CreatePage({ generationsLeft, useGeneration, saveStory, textSize, user 
       return;
     }
 
-    if (generationsLeft <= 0) {
+    if (generationsLeft <= 0 && !user?.isAdmin) {
       alert('Лимит генераций на сегодня исчерпан. Возвращайтесь завтра!');
       return;
     }
@@ -792,43 +893,61 @@ function SettingsPage({ theme, font, accentColor, textSize, updateTheme, updateF
 function SearchPage() {
   const [query, setQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [results, setResults] = useState<string>('');
+  const [results, setResults] = useState<any[]>([]);
+  const { saveStory } = useAppStore();
+  const [searchError, setSearchError] = useState('');
 
   const handleSearch = async () => {
     if (!query) return;
     setIsSearching(true);
-    setResults('');
+    setResults([]);
+    setSearchError('');
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const prompt = `
-        Пользователь ищет реально существующие фанфики по описанию: "${query}".
+        Пользователь ищет фанфики по описанию: "${query}".
         
-        Твоя задача:
-        1. Порекомендовать 3-5 реально существующих популярных фанфиков, которые подходят под это описание (желательно с Ficbook или AO3).
-        2. Сгенерировать прямые ссылки на поиск по тегам для Ficbook и AO3.
-        
-        Формат ответа (используй Markdown):
-        ### 📚 Рекомендации
-        * **[Название]** (Автор) — Краткое описание, почему это подходит.
-        
-        ### 🔍 Ссылки на поиск
-        * [Искать на Ficbook](https://ficbook.net/find?title=&fandom_filter=any&tags=...) (Сгенерируй примерную ссылку с нужными тегами)
-        * [Искать на AO3](https://archiveofourown.org/works/search?work_search[query]=...) (Сгенерируй примерную ссылку)
+        Верни JSON массив из 3-5 выдуманных или реальных интересных фанфиков. 
+        Не используй блок \`\`\`json. Только чистый массив!
+        Поля:
+        - title: строка
+        - author: строка
+        - fandom: строка
+        - description: строка (краткое описание, около 2-3 предложений)
+        - url: строка (ссылка на поиск или чтение, можно заглушку https://ficbook.net/find?...)
       `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-pro',
+        model: 'gemini-2.5-flash',
         contents: prompt,
       });
 
-      setResults(response.text || 'Ничего не найдено.');
+      let text = response.text || '[]';
+      text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      let parsed = [];
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        console.error("Failed to parse JSON:", text);
+        setSearchError('Ошибка формата ответа нейросети. Попробуйте еще раз.');
+      }
+      setResults(parsed);
     } catch (error) {
       console.error(error);
-      setResults('Произошла ошибка при поиске.');
+      setSearchError('Произошла ошибка при поиске.');
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const handleAddToLibrary = async (res: any) => {
+    await saveStory({
+      title: res.title,
+      fandom: res.fandom,
+      content: `**Автор:** ${res.author}\n\n**Описание:** ${res.description}\n\n[Читать оригинал](${res.url})`
+    });
+    alert('Добавлено в библиотеку!');
   };
 
   return (
@@ -861,25 +980,51 @@ function SearchPage() {
         </div>
       </div>
 
-      {(results || isSearching) && (
-        <div className="bg-panel-main border border-border-main rounded-2xl p-8 shadow-sm min-h-[300px]">
+      {(results.length > 0 || isSearching || searchError) && (
+        <div className="bg-panel-main border border-border-main rounded-2xl p-6 md:p-8 shadow-sm min-h-[300px]">
           {isSearching ? (
             <div className="h-full flex flex-col items-center justify-center text-center py-10">
               <Loader2 className="w-10 h-10 animate-spin text-primary-main mb-4" />
               <h3 className="text-lg font-medium">Ищем лучшие работы...</h3>
             </div>
+          ) : searchError ? (
+            <div className="text-center text-red-500 py-10">{searchError}</div>
           ) : (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="prose max-w-none dark:prose-invert"
-              style={{ color: 'var(--text-color)' }}
+              className="space-y-4"
             >
-              <div className="markdown-body">
-                <Markdown components={{ a: ({node, ...props}) => <a className="text-primary-main underline hover:text-primary-hover" target="_blank" rel="noopener noreferrer" {...props} /> }}>
-                  {results}
-                </Markdown>
-              </div>
+              {results.map((res, i) => (
+                <div key={i} className="border border-border-main p-5 rounded-xl bg-bg-main hover:border-primary-main/50 transition-colors">
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 text-xs font-medium text-primary-main mb-2">
+                        <span className="bg-primary-main/10 px-2 py-1 rounded-md">{res.fandom}</span>
+                        <span className="text-text-muted">Автор: {res.author}</span>
+                      </div>
+                      <h3 className="text-xl font-bold mb-2">{res.title}</h3>
+                      <p className="text-text-muted text-sm max-w-2xl leading-relaxed">{res.description}</p>
+                    </div>
+                    <div className="flex flex-row md:flex-col gap-2 shrink-0">
+                      <a 
+                        href={res.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="bg-primary-main hover:bg-primary-hover text-white px-4 py-2 text-sm rounded-lg font-medium transition-all flex items-center gap-2 justify-center"
+                      >
+                        Читать оригинал
+                      </a>
+                      <button 
+                        onClick={() => handleAddToLibrary(res)}
+                        className="bg-panel-hover hover:bg-border-main text-text-main border border-border-main px-4 py-2 text-sm rounded-lg font-medium transition-all flex items-center gap-2 justify-center"
+                      >
+                        <Library className="w-4 h-4" /> В библиотеку
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </motion.div>
           )}
         </div>
@@ -892,6 +1037,206 @@ function SearchPage() {
 
 import { useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+
+function AdminPage() {
+  const { user } = useAppStore();
+  const navigate = useNavigate();
+  const [users, setUsers] = useState<any[]>([]);
+  const [storiesMap, setStoriesMap] = useState<Record<string, Story[]>>({});
+  const [viewingUser, setViewingUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.isAdmin) {
+      navigate('/');
+      return;
+    }
+    loadData();
+  }, [user, navigate]);
+
+  const loadData = () => {
+    const allUsers = JSON.parse(localStorage.getItem('crolff-all-users') || '[]');
+    const smap: Record<string, Story[]> = {};
+    const loadedUsers = allUsers.map((uStr: string) => {
+      const uData = JSON.parse(localStorage.getItem(`crolff-user-${uStr}`) || '{}');
+      const st = JSON.parse(localStorage.getItem(`crolff-stories-${uStr}`) || '[]');
+      smap[uStr] = st;
+      return { 
+        username: uStr,
+        isAdmin: uData.isAdmin,
+        extraGenerations: uData.extraGenerations || 0,
+        storyCount: st.length
+      };
+    });
+    setUsers(loadedUsers);
+    setStoriesMap(smap);
+  };
+
+  const handleToggleInfinity = (username: string, hasInfinity: boolean) => {
+    const uData = JSON.parse(localStorage.getItem(`crolff-user-${username}`) || '{}');
+    uData.extraGenerations = hasInfinity ? 0 : 9999;
+    localStorage.setItem(`crolff-user-${username}`, JSON.stringify(uData));
+    loadData();
+  };
+
+  if (!user?.isAdmin) return null;
+
+  // Compute stats
+  const totalStories = Object.values(storiesMap).reduce((acc, curr) => acc + curr.length, 0);
+  const totalUsers = users.length;
+  
+  // Fake chart data (due to localStorage we don't have real timestamps, so we mock last 7 days somewhat)
+  const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  const activeUsersData = days.map((Day, i) => ({
+    name: Day,
+    пользователи: Math.max(1, Math.floor(totalUsers * (Math.random() * 0.5 + 0.5))),
+  }));
+
+  const fandomsRaw: Record<string, number> = {};
+  Object.values(storiesMap).flat().forEach(s => {
+    fandomsRaw[s.fandom || 'Ориджинал'] = (fandomsRaw[s.fandom || 'Ориджинал'] || 0) + 1;
+  });
+  const popularFandoms = Object.entries(fandomsRaw)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+  
+  const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e'];
+
+  return (
+    <div className="max-w-6xl mx-auto py-8 space-y-8">
+      <div className="space-y-2">
+        <h2 className="text-3xl font-bold flex items-center gap-3">
+          <Crown className="w-8 h-8 text-yellow-500" /> Панель администратора
+        </h2>
+        <p className="text-text-muted">Статистика сайта и управление пользователями.</p>
+      </div>
+
+      {viewingUser ? (
+        <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-2xl font-bold">Фанфики: {viewingUser}</h3>
+            <button 
+              onClick={() => setViewingUser(null)}
+              className="px-4 py-2 text-sm border border-border-main rounded-xl hover:bg-panel-hover"
+            >
+              Закрыть
+            </button>
+          </div>
+          {storiesMap[viewingUser]?.length === 0 ? (
+            <p className="text-text-muted">У этого пользователя нет фанфиков.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {storiesMap[viewingUser]?.map((story) => (
+                <div key={story.id} className="border border-border-main p-4 rounded-xl">
+                  <div className="text-xs text-primary-main mb-1">{story.fandom}</div>
+                  <h4 className="font-bold line-clamp-1">{story.title}</h4>
+                  <p className="text-sm text-text-muted mt-2 line-clamp-2">{story.content}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Stats Segment */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm">
+              <div className="text-text-muted text-sm font-medium mb-1">Всего пользователей</div>
+              <div className="text-4xl font-bold">{totalUsers}</div>
+            </div>
+            <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm">
+              <div className="text-text-muted text-sm font-medium mb-1">Всего фанфиков</div>
+              <div className="text-4xl font-bold">{totalStories}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm min-h-[300px]">
+              <h3 className="font-bold mb-4">Активные пользователи (симуляция недели)</h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={activeUsersData}>
+                  <XAxis dataKey="name" stroke="#888" tick={{ fill: 'var(--text-color)' }} />
+                  <YAxis stroke="#888" tick={{ fill: 'var(--text-color)' }} />
+                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-main)', borderColor: 'var(--border-main)', borderRadius: '12px' }} />
+                  <Bar dataKey="пользователи" fill="var(--primary-color)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            
+            <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm min-h-[300px]">
+              <h3 className="font-bold mb-4">Популярные фэндомы</h3>
+              {popularFandoms.length > 0 ? (
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie data={popularFandoms} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                      {popularFandoms.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-main)', borderColor: 'var(--border-main)', borderRadius: '12px' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-text-muted text-center py-10">Нет данных</div>
+              )}
+            </div>
+          </div>
+
+          {/* User Management */}
+          <div className="bg-panel-main border border-border-main rounded-2xl p-6 shadow-sm">
+            <h3 className="text-xl font-bold mb-4">Список пользователей</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[600px]">
+                <thead>
+                  <tr className="border-b border-border-main text-text-muted text-sm">
+                    <th className="pb-3 pr-4 font-medium">Юзернейм</th>
+                    <th className="pb-3 px-4 font-medium">Роль</th>
+                    <th className="pb-3 px-4 font-medium">Фанфики</th>
+                    <th className="pb-3 pl-4 font-medium">Управление генерациями</th>
+                    <th className="pb-3 pl-4 font-medium text-right">Действие</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm">
+                  {users.map((u) => {
+                    const hasInfinity = u.isAdmin || u.extraGenerations > 0;
+                    return (
+                      <tr key={u.username} className="border-b border-border-main/50 hover:bg-bg-main/50 transition-colors">
+                        <td className="py-4 pr-4 font-semibold">{u.username}</td>
+                        <td className="py-4 px-4 text-text-muted">{u.isAdmin ? 'Администратор' : 'Пользователь'}</td>
+                        <td className="py-4 px-4 text-text-muted">{u.storyCount}</td>
+                        <td className="py-4 px-4">
+                          {!u.isAdmin && (
+                            <button 
+                              onClick={() => handleToggleInfinity(u.username, hasInfinity)}
+                              className={cn(
+                                "text-xs px-3 py-1.5 rounded-lg border font-medium transition-all",
+                                hasInfinity ? "bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20" : "bg-primary-main/10 text-primary-main border-primary-main/20 hover:bg-primary-main/20"
+                              )}
+                            >
+                              {hasInfinity ? 'Отозвать бесконечность' : 'Выдать ∞ генераций'}
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-4 pl-4 text-right">
+                          <button
+                            onClick={() => setViewingUser(u.username)}
+                            className="text-primary-main hover:underline font-medium"
+                          >
+                            Просмотр работ
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function StoryPage({ stories, textSize }: { stories: Story[], textSize: number }) {
   const { id } = useParams();
@@ -970,6 +1315,7 @@ function AppContent() {
             } />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/library" element={<LibraryPage stories={stories} />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="/story/:id" element={<StoryPage stories={stories} textSize={textSize} />} />
             <Route path="/settings" element={
               <SettingsPage 
